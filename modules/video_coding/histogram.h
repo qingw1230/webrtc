@@ -18,26 +18,24 @@ namespace webrtc {
 namespace video_coding {
 class Histogram {
  public:
-  // A discrete histogram where every bucket with range [0, num_buckets).
-  // Values greater or equal to num_buckets will be placed in the last bucket.
+  // 离散直方图，其中每个桶的范围为 [0, num_buckets)
+  // 大于或等于 num_buckets 的值放在最后一个桶中
   Histogram(size_t num_buckets, size_t max_num_values);
 
-  // Add a value to the histogram. If there already is max_num_values in the
-  // histogram then the oldest value will be replaced with the new value.
+  // 向直方图添加一个值。如果已经满了，则替换掉最旧的值
   void Add(size_t value);
 
-  // Calculates how many buckets have to be summed in order to accumulate at
-  // least the given probability.
+  // 计算需要对多少个桶求和才能累计给定的概率
   size_t InverseCdf(float probability) const;
 
-  // How many values that make up this histogram.
+  // 这个直方图包含多少个值
   size_t NumValues() const;
 
  private:
-  // A circular buffer that holds the values that make up the histogram.
+  // 保存构成直方图的值的循环缓冲区
   std::vector<size_t> values_;
   std::vector<size_t> buckets_;
-  size_t index_;
+  size_t index_; // 环形缓冲区索引
 };
 
 }  // namespace video_coding

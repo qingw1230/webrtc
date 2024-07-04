@@ -85,8 +85,7 @@ class NackRequester final : public NackRequesterBase {
   void UpdateRtt(int64_t rtt_ms);
 
  private:
-  // Which fields to consider when deciding which packet to nack in
-  // GetNackBatch.
+  // 在 GetNackBatch 中决定要 nack 哪些数据包时，需要考虑哪些字段？
   enum NackFilterOptions { kSeqNumOnly, kTimeOnly, kSeqNumAndTime };
 
   // This class holds the sequence number of the packet that is in the nack list
@@ -98,11 +97,11 @@ class NackRequester final : public NackRequesterBase {
              uint16_t send_at_seq_num,
              Timestamp created_at_time);
 
-    uint16_t seq_num;
-    uint16_t send_at_seq_num;
-    Timestamp created_at_time;
-    Timestamp sent_at_time;
-    int retries;
+    uint16_t seq_num; // 序列号
+    uint16_t send_at_seq_num; // 发送该重传信息时，最新序列号必须大于该值
+    Timestamp created_at_time; // 该 NackInfo 创建时间
+    Timestamp sent_at_time; // 最近一次的重传时间
+    int retries; // 重传次数
   };
 
   void AddPacketsToNack(uint16_t seq_num_start, uint16_t seq_num_end)
@@ -129,13 +128,13 @@ class NackRequester final : public NackRequesterBase {
   // known thread (e.g. see `initialized_`). Those probably do not need
   // synchronized access.
   std::map<uint16_t, NackInfo, DescendingSeqNumComp<uint16_t>> nack_list_
-      RTC_GUARDED_BY(worker_thread_);
+      RTC_GUARDED_BY(worker_thread_); // 等待重传的 NackInfo 映射
   std::set<uint16_t, DescendingSeqNumComp<uint16_t>> recovered_list_
-      RTC_GUARDED_BY(worker_thread_);
+      RTC_GUARDED_BY(worker_thread_); // 已重传集合
   video_coding::Histogram reordering_histogram_ RTC_GUARDED_BY(worker_thread_);
-  bool initialized_ RTC_GUARDED_BY(worker_thread_);
-  TimeDelta rtt_ RTC_GUARDED_BY(worker_thread_);
-  uint16_t newest_seq_num_ RTC_GUARDED_BY(worker_thread_);
+  bool initialized_ RTC_GUARDED_BY(worker_thread_); // 是否收到过数据
+  TimeDelta rtt_ RTC_GUARDED_BY(worker_thread_); // 接收端 RTT
+  uint16_t newest_seq_num_ RTC_GUARDED_BY(worker_thread_); // 收到的最新的序列号
 
   // Adds a delay before send nack on packet received.
   const TimeDelta send_nack_delay_;

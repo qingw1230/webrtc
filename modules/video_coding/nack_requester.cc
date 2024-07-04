@@ -146,6 +146,7 @@ int NackRequester::OnReceivedPacket(uint16_t seq_num) {
   return OnReceivedPacket(seq_num, false);
 }
 
+// video 收到数据包时调用该函数，返回该包重传次数
 int NackRequester::OnReceivedPacket(uint16_t seq_num,
                                     bool is_recovered) {
   RTC_DCHECK_RUN_ON(worker_thread_);
@@ -155,17 +156,18 @@ int NackRequester::OnReceivedPacket(uint16_t seq_num,
   //                 statistics to never be updated.
   bool is_retransmitted = true;
 
+  // 第一次收到数据包
   if (!initialized_) {
     newest_seq_num_ = seq_num;
     initialized_ = true;
     return 0;
   }
 
-  // Since the `newest_seq_num_` is a packet we have actually received we know
-  // that packet has never been Nacked.
+  // 重复收到的包
   if (seq_num == newest_seq_num_)
     return 0;
 
+  // 当前的 seq_num 更旧，它可能是乱序的包，也可能是重传的包
   if (AheadOf(newest_seq_num_, seq_num)) {
     // An out of order packet has been received.
     auto nack_list_it = nack_list_.find(seq_num);
@@ -175,6 +177,7 @@ int NackRequester::OnReceivedPacket(uint16_t seq_num,
       nack_list_.erase(nack_list_it);
     }
     if (!is_retransmitted)
+      // 不是在收到 RTCP 的重传信息，重新发的包，是稍晚到的乱序包
       UpdateReorderingStatistics(seq_num);
     return nacks_sent_for_packet;
   }
@@ -222,10 +225,11 @@ void NackRequester::UpdateRtt(int64_t rtt_ms) {
   rtt_ = TimeDelta::Millis(rtt_ms);
 }
 
+// 添加新的需要重传的数据包信息
 void NackRequester::AddPacketsToNack(uint16_t seq_num_start,
                                      uint16_t seq_num_end) {
   // Called on worker_thread_.
-  // Remove old packets.
+  // 清理时间比较久的 seq_num
   auto it = nack_list_.lower_bound(seq_num_end - kMaxPacketAge);
   nack_list_.erase(nack_list_.begin(), it);
 
@@ -249,6 +253,7 @@ void NackRequester::AddPacketsToNack(uint16_t seq_num_start,
   }
 }
 
+// 获取要 nack 的数据包列表
 std::vector<uint16_t> NackRequester::GetNackBatch(NackFilterOptions options) {
   // Called on worker_thread_.
 
@@ -282,13 +287,16 @@ std::vector<uint16_t> NackRequester::GetNackBatch(NackFilterOptions options) {
   return nack_batch;
 }
 
+// 更新乱序统计信息
 void NackRequester::UpdateReorderingStatistics(uint16_t seq_num) {
   // Running on worker_thread_.
   RTC_DCHECK(AheadOf(newest_seq_num_, seq_num));
+  // 统计当前包和最新包的差值
   uint16_t diff = ReverseDiff(newest_seq_num_, seq_num);
   reordering_histogram_.Add(diff);
 }
 
+// 在 probability 概率等到乱序包，需要等几个包
 int NackRequester::WaitNumberOfPackets(float probability) const {
   // Called on worker_thread_;
   if (reordering_histogram_.NumValues() == 0)
