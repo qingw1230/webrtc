@@ -22,21 +22,26 @@ class IntervalBudget {
  public:
   explicit IntervalBudget(int initial_target_rate_kbps);
   IntervalBudget(int initial_target_rate_kbps, bool can_build_up_underuse);
+  // 设置目标发送码率
   void set_target_rate_kbps(int target_rate_kbps);
 
-  // TODO(tschumim): Unify IncreaseBudget and UseBudget to one function.
+  // 时间流逝后增加预算
   void IncreaseBudget(int64_t delta_time_ms);
+  // 发送数据后减少预算
   void UseBudget(size_t bytes);
 
+  // 剩余预算
   size_t bytes_remaining() const;
+  // 剩余预算与最大预算比值
   double budget_ratio() const;
+  // 目标发送码率
   int target_rate_kbps() const;
 
  private:
-  int target_rate_kbps_;
-  int64_t max_bytes_in_budget_;
-  int64_t bytes_remaining_;
-  bool can_build_up_underuse_;
+  int target_rate_kbps_;  // 目标码率
+  int64_t max_bytes_in_budget_;  // 最大预算
+  int64_t bytes_remaining_;  // 剩余可发送字节数
+  bool can_build_up_underuse_;  // 是否可使用上周期剩余字节数
 };
 
 }  // namespace webrtc

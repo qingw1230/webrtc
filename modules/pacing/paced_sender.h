@@ -39,16 +39,13 @@ namespace webrtc {
 class Clock;
 class RtcEventLog;
 
-// TODO(bugs.webrtc.org/10937): Remove the inheritance from Module after
-// updating dependencies.
 class PacedSender : public Module,
                     public RtpPacketPacer,
                     public RtpPacketSender {
  public:
-  // Expected max pacer delay in ms. If ExpectedQueueTime() is higher than
-  // this value, the packet producers should wait (eg drop frames rather than
-  // encoding them). Bitrate sent may temporarily exceed target set by
-  // UpdateBitrate() so that this limit will be upheld.
+  // 预期的最大 pacer 延迟（以 ms 为单位）。
+  // 如果 ExpectedQueueTime() 高于此值，数据包生产者应该等待（例如，丢弃帧而不是编码它们）。
+  // 发送的 bitrate 可能会暂时超过 UpdateBitrate() 设置的目标，以便维持此限制。
   static const int64_t kMaxQueueLengthMs;
   // Pacing-rate relative to our target send rate.
   // Multiplicative factor that is applied to the target bitrate to calculate
@@ -57,8 +54,6 @@ class PacedSender : public Module,
   // overshoots from the encoder.
   static const float kDefaultPaceMultiplier;
 
-  // TODO(bugs.webrtc.org/10937): Make the `process_thread` argument be non
-  // optional once all callers have been updated.
   PacedSender(Clock* clock,
               PacketRouter* packet_router,
               RtcEventLog* event_log,
@@ -69,8 +64,7 @@ class PacedSender : public Module,
 
   // Methods implementing RtpPacketSender.
 
-  // Adds the packet to the queue and calls PacketRouter::SendPacket() when
-  // it's time to send.
+  // 调用 PacingController::EnqueuePacket 将数据包添加到队列
   void EnqueuePackets(
       std::vector<std::unique_ptr<RtpPacketToSend>> packet) override;
 

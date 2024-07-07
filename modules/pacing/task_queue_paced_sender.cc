@@ -126,17 +126,6 @@ void TaskQueuePacedSender::SetPacingRates(DataRate pacing_rate,
 
 void TaskQueuePacedSender::EnqueuePackets(
     std::vector<std::unique_ptr<RtpPacketToSend>> packets) {
-#if RTC_TRACE_EVENTS_ENABLED
-  TRACE_EVENT0(TRACE_DISABLED_BY_DEFAULT("webrtc"),
-               "TaskQueuePacedSender::EnqueuePackets");
-  for (auto& packet : packets) {
-    TRACE_EVENT2(TRACE_DISABLED_BY_DEFAULT("webrtc"),
-                 "TaskQueuePacedSender::EnqueuePackets::Loop",
-                 "sequence_number", packet->SequenceNumber(), "rtp_timestamp",
-                 packet->Timestamp());
-  }
-#endif
-
   task_queue_.PostTask([this, packets_ = std::move(packets)]() mutable {
     RTC_DCHECK_RUN_ON(&task_queue_);
     for (auto& packet : packets_) {
@@ -246,6 +235,7 @@ void TaskQueuePacedSender::MaybeProcessPackets(
                  avg_packet_send_time * max_hold_back_window_in_packets_);
   }
 
+  // 需要多少时间之后，再次进行这个调度
   absl::optional<TimeDelta> time_to_next_process;
   if (pacing_controller_.IsProbing() &&
       next_process_time != next_process_time_) {
@@ -267,6 +257,8 @@ void TaskQueuePacedSender::MaybeProcessPackets(
     time_to_next_process = std::max(next_process_time - now, hold_back_window);
   }
 
+  // 如果没有正在进行的任务或正在进行的任务晚于 next_send_time，
+  // 则安排一个新任务。之前进行中的任务将 retired。
   if (time_to_next_process) {
     // Set a new scheduled process time and post a delayed task.
     next_process_time_ = next_process_time;

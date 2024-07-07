@@ -63,6 +63,7 @@ class TaskQueuePacedSender : public RtpPacketPacer, public RtpPacketSender {
 
   // Adds the packet to the queue and calls
   // PacingController::PacketSender::SendPacket() when it's time to send.
+  // 确保调度必要的延迟任务
   void EnqueuePackets(
       std::vector<std::unique_ptr<RtpPacketToSend>> packets) override;
 
@@ -144,10 +145,12 @@ class TaskQueuePacedSender : public RtpPacketPacer, public RtpPacketSender {
   // delayed task that will call MaybeProcessPackets() with that time
   // as parameter.
   // Timestamp::MinusInfinity() indicates no valid pending task.
+  // 初始值是负无穷大，表示暂时还没有调度任何任务
   Timestamp next_process_time_ RTC_GUARDED_BY(task_queue_);
 
   // Indicates if this task queue is started. If not, don't allow
   // posting delayed tasks yet.
+  // 表示此任务队列是否已启动，如果没有，则不允许发布延迟任务
   bool is_started_ RTC_GUARDED_BY(task_queue_);
 
   // Indicates if this task queue is shutting down. If so, don't allow

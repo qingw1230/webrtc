@@ -115,16 +115,8 @@ void PacedSender::SetPacingRates(DataRate pacing_rate, DataRate padding_rate) {
 void PacedSender::EnqueuePackets(
     std::vector<std::unique_ptr<RtpPacketToSend>> packets) {
   {
-    TRACE_EVENT0(TRACE_DISABLED_BY_DEFAULT("webrtc"),
-                 "PacedSender::EnqueuePackets");
     MutexLock lock(&mutex_);
     for (auto& packet : packets) {
-      TRACE_EVENT2(TRACE_DISABLED_BY_DEFAULT("webrtc"),
-                   "PacedSender::EnqueuePackets::Loop", "sequence_number",
-                   packet->SequenceNumber(), "rtp_timestamp",
-                   packet->Timestamp());
-
-      RTC_DCHECK_GE(packet->capture_time_ms(), 0);
       pacing_controller_.EnqueuePacket(std::move(packet));
     }
   }

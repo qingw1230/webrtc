@@ -35,15 +35,16 @@ RoundRobinPacketQueue::QueuedPacket::QueuedPacket(
     : priority_(priority),
       enqueue_time_(enqueue_time),
       enqueue_order_(enqueue_order),
-      is_retransmission_(packet->packet_type() ==
-                         RtpPacketMediaType::kRetransmission),
+      is_retransmission_(packet->packet_type() == RtpPacketMediaType::kRetransmission),
       enqueue_time_it_(enqueue_time_it),
       owned_packet_(packet.release()) {}
 
 bool RoundRobinPacketQueue::QueuedPacket::operator<(
     const RoundRobinPacketQueue::QueuedPacket& other) const {
-  if (priority_ != other.priority_)
+  if (priority_ != other.priority_) {
+    // 优先队列底层小根堆，要用大于号
     return priority_ > other.priority_;
+  }
   if (is_retransmission_ != other.is_retransmission_)
     return other.is_retransmission_;
 
@@ -88,6 +89,7 @@ RoundRobinPacketQueue::QueuedPacket::EnqueueTimeIterator() const {
   return enqueue_time_it_;
 }
 
+// 将 RTP 包的入队时间减去指定 pause 时间
 void RoundRobinPacketQueue::QueuedPacket::SubtractPauseTime(
     TimeDelta pause_time_sum) {
   enqueue_time_ -= pause_time_sum;
@@ -139,8 +141,8 @@ void RoundRobinPacketQueue::Push(int priority,
                                  uint64_t enqueue_order,
                                  std::unique_ptr<RtpPacketToSend> packet) {
   RTC_DCHECK(packet->packet_type().has_value());
+  // 没有存储任何报文时，直接存在 single_packet_queue_ 中，不进入队列
   if (size_packets_ == 0) {
-    // Single packet fast-path.
     single_packet_queue_.emplace(
         QueuedPacket(priority, enqueue_time, enqueue_order,
                      enqueue_times_.end(), std::move(packet)));
@@ -149,15 +151,17 @@ void RoundRobinPacketQueue::Push(int priority,
     size_packets_ = 1;
     size_ += PacketSize(*single_packet_queue_);
   } else {
+    // 如果 single_packet_queue_ 有数据，先把里面的数据 push 到 queue 中，然后重置它
     MaybePromoteSinglePacketToNormalQueue();
+    // 插入到队列中
     Push(QueuedPacket(priority, enqueue_time, enqueue_order,
                       enqueue_times_.insert(enqueue_time), std::move(packet)));
   }
 }
 
 std::unique_ptr<RtpPacketToSend> RoundRobinPacketQueue::Pop() {
+  // single_packet_queue_ 中有数据直接返回
   if (single_packet_queue_.has_value()) {
-    RTC_DCHECK(stream_priorities_.empty());
     std::unique_ptr<RtpPacketToSend> rtp_packet(
         single_packet_queue_->RtpPacket());
     single_packet_queue_.reset();
@@ -167,30 +171,23 @@ std::unique_ptr<RtpPacketToSend> RoundRobinPacketQueue::Pop() {
     return rtp_packet;
   }
 
-  RTC_DCHECK(!Empty());
+  // 返回优先级最高的 Stream，获取最前面的数据
   Stream* stream = GetHighestPriorityStream();
   const QueuedPacket& queued_packet = stream->packet_queue.top();
 
   stream_priorities_.erase(stream->priority_it);
 
-  // Calculate the total amount of time spent by this packet in the queue
-  // while in a non-paused state. Note that the `pause_time_sum_ms_` was
-  // subtracted from `packet.enqueue_time_ms` when the packet was pushed, and
-  // by subtracting it now we effectively remove the time spent in in the
-  // queue while in a paused state.
+  // 计算此数据包在非暂停状态下在队列中花费的时间。
+  // 请注意，在 Push 数据包时，会从 packet.enqueue_time_ms 中减去 pause_time_sum_ms_，
+  // 现在通过减去它，我们有效消除了在暂停状态下在队列中花费的时间。
   TimeDelta time_in_non_paused_state =
       time_last_updated_ - queued_packet.EnqueueTime() - pause_time_sum_;
   queue_time_sum_ -= time_in_non_paused_state;
-
-  RTC_CHECK(queued_packet.EnqueueTimeIterator() != enqueue_times_.end());
+  // 删除该报文的 queue time
   enqueue_times_.erase(queued_packet.EnqueueTimeIterator());
 
-  // Update `bytes` of this stream. The general idea is that the stream that
-  // has sent the least amount of bytes should have the highest priority.
-  // The problem with that is if streams send with different rates, in which
-  // case a "budget" will be built up for the stream sending at the lower
-  // rate. To avoid building a too large budget we limit `bytes` to be within
-  // kMaxLeading bytes of the stream that has sent the most amount of bytes.
+  // 报文发送后，更新 Stream 发送的报文字节数，发送较少的 Stream 应该有更高的调度优先级。
+  // 为了避免发送码率较低的 Stream 一直处于较高优先级发送过多，限制了最低发送字节数。
   DataSize packet_size = PacketSize(queued_packet);
   stream->size =
       std::max(stream->size + packet_size, max_size_ - kMaxLeadingSize);
@@ -198,13 +195,11 @@ std::unique_ptr<RtpPacketToSend> RoundRobinPacketQueue::Pop() {
 
   size_ -= packet_size;
   size_packets_ -= 1;
-  RTC_CHECK(size_packets_ > 0 || queue_time_sum_ == TimeDelta::Zero());
 
   std::unique_ptr<RtpPacketToSend> rtp_packet(queued_packet.RtpPacket());
   stream->packet_queue.pop();
 
-  // If there are packets left to be sent, schedule the stream again.
-  RTC_CHECK(!IsSsrcScheduled(stream->ssrc));
+  // 如果还有数据包需要发送，再次调度该流
   if (stream->packet_queue.empty()) {
     stream->priority_it = stream_priorities_.end();
   } else {
@@ -218,10 +213,8 @@ std::unique_ptr<RtpPacketToSend> RoundRobinPacketQueue::Pop() {
 
 bool RoundRobinPacketQueue::Empty() const {
   if (size_packets_ == 0) {
-    RTC_DCHECK(!single_packet_queue_.has_value() && stream_priorities_.empty());
     return true;
   }
-  RTC_DCHECK(single_packet_queue_.has_value() || !stream_priorities_.empty());
   return false;
 }
 
@@ -261,12 +254,10 @@ Timestamp RoundRobinPacketQueue::OldestEnqueueTime() const {
 
   if (Empty())
     return Timestamp::MinusInfinity();
-  RTC_CHECK(!enqueue_times_.empty());
   return *enqueue_times_.begin();
 }
 
 void RoundRobinPacketQueue::UpdateQueueTime(Timestamp now) {
-  RTC_CHECK_GE(now, time_last_updated_);
   if (now == time_last_updated_)
     return;
 
@@ -321,41 +312,39 @@ TimeDelta RoundRobinPacketQueue::AverageQueueTime() const {
 }
 
 void RoundRobinPacketQueue::Push(QueuedPacket packet) {
+  // 根据报文 ssrc 查找对应的 stream，没找到则创建一个新的 Stream
   auto stream_info_it = streams_.find(packet.Ssrc());
   if (stream_info_it == streams_.end()) {
     stream_info_it = streams_.emplace(packet.Ssrc(), Stream()).first;
+    // 暂时还没确定该 Stream 的优先级，即没有被调度
     stream_info_it->second.priority_it = stream_priorities_.end();
     stream_info_it->second.ssrc = packet.Ssrc();
   }
 
   Stream* stream = &stream_info_it->second;
-
+  // 调整流的优先级
   if (stream->priority_it == stream_priorities_.end()) {
-    // If the SSRC is not currently scheduled, add it to `stream_priorities_`.
-    RTC_CHECK(!IsSsrcScheduled(stream->ssrc));
+    // 如果该 SSRC 没有被调度，加入到 stream_priorities_
     stream->priority_it = stream_priorities_.emplace(
         StreamPrioKey(packet.Priority(), stream->size), packet.Ssrc());
   } else if (packet.Priority() < stream->priority_it->first.priority) {
-    // If the priority of this SSRC increased, remove the outdated StreamPrioKey
-    // and insert a new one with the new priority. Note that `priority_` uses
-    // lower ordinal for higher priority.
+    // 数值越小，优先级越高
+    // 当前报文优先级比之前的小，说明该流优先级变高，需要更新 Stream 的优先级
     stream_priorities_.erase(stream->priority_it);
     stream->priority_it = stream_priorities_.emplace(
         StreamPrioKey(packet.Priority(), stream->size), packet.Ssrc());
   }
-  RTC_CHECK(stream->priority_it != stream_priorities_.end());
 
+  // 还没有入队时间，说明是从 single_packet_queue_ 中提升来的，其他情况已向 enqueue_times_ 中插入了
+  // 注意 packet 只保存 enqueue_times_ 的 iterator
   if (packet.EnqueueTimeIterator() == enqueue_times_.end()) {
     // Promotion from single-packet queue. Just add to enqueue times.
     packet.UpdateEnqueueTimeIterator(
         enqueue_times_.insert(packet.EnqueueTime()));
   } else {
-    // In order to figure out how much time a packet has spent in the queue
-    // while not in a paused state, we subtract the total amount of time the
-    // queue has been paused so far, and when the packet is popped we subtract
-    // the total amount of time the queue has been paused at that moment. This
-    // way we subtract the total amount of time the packet has spent in the
-    // queue while in a paused state.
+    // 为了计算一个数据包在非暂停状态下在队列中花费的时间，我们减去到目前为止队列暂停的时间，
+    // 当数据包被弹出时，我们再减去那时队列暂停的时间。
+    // 这样我们就减去了数据包在暂停状态下在队列中花费的时间。
     UpdateQueueTime(packet.EnqueueTime());
     packet.SubtractPauseTime(pause_time_sum_);
 
@@ -363,9 +352,11 @@ void RoundRobinPacketQueue::Push(QueuedPacket packet) {
     size_ += PacketSize(packet);
   }
 
+  // 插入到 Stream 的 queue 中
   stream->packet_queue.push(packet);
 }
 
+// 获取指定 packet 字节数
 DataSize RoundRobinPacketQueue::PacketSize(const QueuedPacket& packet) const {
   DataSize packet_size = DataSize::Bytes(packet.RtpPacket()->payload_size() +
                                          packet.RtpPacket()->padding_size());
@@ -376,6 +367,7 @@ DataSize RoundRobinPacketQueue::PacketSize(const QueuedPacket& packet) const {
   return packet_size;
 }
 
+// 将 single_packet_queue_ 中数据移到正常优先队列中
 void RoundRobinPacketQueue::MaybePromoteSinglePacketToNormalQueue() {
   if (single_packet_queue_.has_value()) {
     Push(*single_packet_queue_);
@@ -385,13 +377,9 @@ void RoundRobinPacketQueue::MaybePromoteSinglePacketToNormalQueue() {
 
 RoundRobinPacketQueue::Stream*
 RoundRobinPacketQueue::GetHighestPriorityStream() {
-  RTC_CHECK(!stream_priorities_.empty());
   uint32_t ssrc = stream_priorities_.begin()->second;
 
   auto stream_info_it = streams_.find(ssrc);
-  RTC_CHECK(stream_info_it != streams_.end());
-  RTC_CHECK(stream_info_it->second.priority_it == stream_priorities_.begin());
-  RTC_CHECK(!stream_info_it->second.packet_queue.empty());
   return &stream_info_it->second;
 }
 

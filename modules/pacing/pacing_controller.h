@@ -43,11 +43,9 @@ namespace webrtc {
 // externally, via the PacingController::PacketSender interface.
 class PacingController {
  public:
-  // Periodic mode uses the IntervalBudget class for tracking bitrate
-  // budgets, and expected ProcessPackets() to be called a fixed rate,
-  // e.g. every 5ms as implemented by PacedSender.
-  // Dynamic mode allows for arbitrary time delta between calls to
-  // ProcessPackets.
+  // 周期模式使用 IntervalBudget 类来追踪 bitrate 预算，并期望 ProcessPackets()
+  // 以固定速率调用，例如 PacedSender 实现的每 5ms 一次。
+  // 动态模式允许在调用 ProcessPackets 之间有任意时间差。
   enum class ProcessMode { kPeriodic, kDynamic };
 
   class PacketSender {
@@ -87,8 +85,7 @@ class PacingController {
 
   ~PacingController();
 
-  // Adds the packet to the queue and calls PacketRouter::SendPacket() when
-  // it's time to send.
+  // 将数据包添加到队列并在发送时调用 PacketRouter::SendPacket()
   void EnqueuePacket(std::unique_ptr<RtpPacketToSend> packet);
 
   void CreateProbeCluster(DataRate bitrate, int cluster_id);
@@ -138,11 +135,10 @@ class PacingController {
   // effect.
   void SetProbingEnabled(bool enabled);
 
-  // Returns the next time we expect ProcessPackets() to be called.
+  // 返回我们预期下次调用 ProcessPackets() 的时间
   Timestamp NextSendTime() const;
 
-  // Check queue of pending packets and send them or padding packets, if budget
-  // is available.
+  // 如果有预算，检查待发送的数据包队列，发送它们或者填充数据包
   void ProcessPackets();
 
   bool Congested() const;
@@ -152,16 +148,19 @@ class PacingController {
  private:
   void EnqueuePacketInternal(std::unique_ptr<RtpPacketToSend> packet,
                              int priority);
+  // 获取距离上一次处理过了多长时间，并更新相关时间
   TimeDelta UpdateTimeAndGetElapsed(Timestamp now);
   bool ShouldSendKeepalive(Timestamp now) const;
 
-  // Updates the number of bytes that can be sent for the next time interval.
+  // 时间流逝，增加预算
   void UpdateBudgetWithElapsedTime(TimeDelta delta);
+  // 发送数据，减少预算
   void UpdateBudgetWithSentData(DataSize size);
 
   DataSize PaddingToAdd(DataSize recommended_probe_size,
                         DataSize data_sent) const;
 
+  // 获取准备发送的数据包
   std::unique_ptr<RtpPacketToSend> GetPendingPacket(
       const PacedPacketInfo& pacing_info,
       Timestamp target_send_time,
@@ -179,7 +178,7 @@ class PacingController {
   const std::unique_ptr<FieldTrialBasedConfig> fallback_field_trials_;
   const WebRtcKeyValueConfig* field_trials_;
 
-  const bool drain_large_queues_;
+  const bool drain_large_queues_;  // 队列比较大时，是否启用排空功能
   const bool send_padding_if_silent_;
   const bool pace_audio_;
   const bool ignore_transport_overhead_;
@@ -201,35 +200,34 @@ class PacingController {
   // In periodic mode, `media_debt_` and `padding_debt_` will be used together
   // with the target rates.
 
-  // This is the media budget, keeping track of how many bits of media
-  // we can pace out during the current interval.
+  // 这是 media 预算，用于跟踪在当前间隔内我们可以发出多少数据
   IntervalBudget media_budget_;
-  // This is the padding budget, keeping track of how many bits of padding we're
-  // allowed to send out during the current interval. This budget will be
-  // utilized when there's no media to send.
+  // 这是 padding 预算，用于跟踪当前间隔内允许发送多少填充。
+  // 在没有 media 数据要发送时，将使用这个预算。
   IntervalBudget padding_budget_;
 
-  DataSize media_debt_;
+  // media 和 padding 未处理数据量
+  DataSize media_debt_;  // 媒体数据负债
   DataSize padding_debt_;
-  DataRate media_rate_;
+  DataRate media_rate_;  // 媒体数据发送速率
   DataRate padding_rate_;
 
   BitrateProber prober_;
   bool probing_send_failure_;
 
-  DataRate pacing_bitrate_;
+  DataRate pacing_bitrate_;  // 设置的发送码率，由 RtpTransportControllerSend 模块调用
 
-  Timestamp last_process_time_;
-  Timestamp last_send_time_;
+  Timestamp last_process_time_;  // 上一次处理的时间
+  Timestamp last_send_time_;  // 上一次发送的时间
   absl::optional<Timestamp> first_sent_packet_time_;
 
-  RoundRobinPacketQueue packet_queue_;
-  uint64_t packet_counter_;
+  RoundRobinPacketQueue packet_queue_;  // 存储数据包的优先级队列
+  uint64_t packet_counter_;  // RTP 包入队列的顺序
 
   DataSize congestion_window_size_;
-  DataSize outstanding_data_;
+  DataSize outstanding_data_;  // 未处理数据量
 
-  TimeDelta queue_time_limit;
+  TimeDelta queue_time_limit;  // 期望的最大延迟时间
   bool account_for_audio_;
   bool include_overhead_;
 };

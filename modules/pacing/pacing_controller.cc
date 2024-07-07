@@ -64,6 +64,7 @@ TimeDelta GetDynamicPaddingTarget(const WebRtcKeyValueConfig& field_trials) {
   return padding_target.Get();
 }
 
+// 获取指定 type 包的优先级
 int GetPriorityForType(RtpPacketMediaType type) {
   // Lower number takes priority over higher.
   switch (type) {
@@ -137,10 +138,6 @@ PacingController::PacingController(Clock* clock,
       queue_time_limit(kMaxExpectedQueueLength),
       account_for_audio_(false),
       include_overhead_(false) {
-  if (!drain_large_queues_) {
-    RTC_LOG(LS_WARNING) << "Pacer queues will not be drained,"
-                           "pushback experiment must be enabled.";
-  }
   FieldTrialParameter<int> min_packet_limit_ms("", min_packet_limit_.ms());
   ParseFieldTrial({&min_packet_limit_ms},
                   field_trials_->Lookup("WebRTC-Pacer-MinPacketLimitMs"));
@@ -155,15 +152,11 @@ void PacingController::CreateProbeCluster(DataRate bitrate, int cluster_id) {
 }
 
 void PacingController::Pause() {
-  if (!paused_)
-    RTC_LOG(LS_INFO) << "PacedSender paused.";
   paused_ = true;
   packet_queue_.SetPauseState(true, CurrentTime());
 }
 
 void PacingController::Resume() {
-  if (paused_)
-    RTC_LOG(LS_INFO) << "PacedSender resumed.";
   paused_ = false;
   packet_queue_.SetPauseState(false, CurrentTime());
 }
@@ -204,10 +197,6 @@ bool PacingController::IsProbing() const {
 Timestamp PacingController::CurrentTime() const {
   Timestamp time = clock_->CurrentTime();
   if (time < last_timestamp_) {
-    RTC_LOG(LS_WARNING)
-        << "Non-monotonic clock behavior observed. Previous timestamp: "
-        << last_timestamp_.ms() << ", new timestamp: " << time.ms();
-    RTC_DCHECK_GE(time, last_timestamp_);
     time = last_timestamp_;
   }
   last_timestamp_ = time;
@@ -215,29 +204,21 @@ Timestamp PacingController::CurrentTime() const {
 }
 
 void PacingController::SetProbingEnabled(bool enabled) {
-  RTC_CHECK_EQ(0, packet_counter_);
   prober_.SetEnabled(enabled);
 }
 
 void PacingController::SetPacingRates(DataRate pacing_rate,
                                       DataRate padding_rate) {
-  RTC_DCHECK_GT(pacing_rate, DataRate::Zero());
   media_rate_ = pacing_rate;
   padding_rate_ = padding_rate;
   pacing_bitrate_ = pacing_rate;
   padding_budget_.set_target_rate_kbps(padding_rate.kbps());
-
-  RTC_LOG(LS_VERBOSE) << "bwe:pacer_updated pacing_kbps="
-                      << pacing_bitrate_.kbps()
-                      << " padding_budget_kbps=" << padding_rate.kbps();
 }
 
 void PacingController::EnqueuePacket(std::unique_ptr<RtpPacketToSend> packet) {
-  RTC_DCHECK(pacing_bitrate_ > DataRate::Zero())
-      << "SetPacingRate must be called before InsertPacket.";
-  RTC_CHECK(packet->packet_type());
   // Get priority first and store in temporary, to avoid chance of object being
   // moved before GetPriorityForType() being called.
+  // 获取 packet 的优先级
   const int priority = GetPriorityForType(*packet->packet_type());
   EnqueuePacketInternal(std::move(packet), priority);
 }
@@ -259,7 +240,6 @@ void PacingController::SetTransportOverhead(DataSize overhead_per_packet) {
 }
 
 TimeDelta PacingController::ExpectedQueueTime() const {
-  RTC_DCHECK_GT(pacing_bitrate_, DataRate::Zero());
   return TimeDelta::Millis(
       (QueueSizeData().bytes() * 8 * rtc::kNumMillisecsPerSec) /
       pacing_bitrate_.bps());
@@ -317,13 +297,9 @@ TimeDelta PacingController::UpdateTimeAndGetElapsed(Timestamp now) {
   if (last_process_time_.IsMinusInfinity() || now < last_process_time_) {
     return TimeDelta::Zero();
   }
-  RTC_DCHECK_GE(now, last_process_time_);
   TimeDelta elapsed_time = now - last_process_time_;
   last_process_time_ = now;
   if (elapsed_time > kMaxElapsedTime) {
-    RTC_LOG(LS_WARNING) << "Elapsed time (" << elapsed_time.ms()
-                        << " ms) longer than expected, limiting to "
-                        << kMaxElapsedTime.ms();
     elapsed_time = kMaxElapsedTime;
   }
   return elapsed_time;
@@ -381,18 +357,16 @@ Timestamp PacingController::NextSendTime() const {
     return last_send_time_ + kCongestedPacketInterval;
   }
 
-  // Check how long until we can send the next media packet.
+  // 检查我们多久才能发送下一个媒体数据包
   if (media_rate_ > DataRate::Zero() && !packet_queue_.Empty()) {
     return std::min(last_send_time_ + kPausedProcessInterval,
                     last_process_time_ + media_debt_ / media_rate_);
   }
 
-  // If we _don't_ have pending packets, check how long until we have
-  // bandwidth for padding packets. Both media and padding debts must
-  // have been drained to do this.
+  // 如果我们没有待处理的数据包，检查我们多久才能有带宽发送填充包。
+  // 必须先清空媒体负债和填充负债才能执行此操作。
   if (padding_rate_ > DataRate::Zero() && packet_queue_.Empty()) {
-    TimeDelta drain_time =
-        std::max(media_debt_ / media_rate_, padding_debt_ / padding_rate_);
+    TimeDelta drain_time = std::max(media_debt_ / media_rate_, padding_debt_ / padding_rate_);
     return std::min(last_send_time_ + kPausedProcessInterval,
                     last_process_time_ + drain_time);
   }
@@ -406,15 +380,14 @@ Timestamp PacingController::NextSendTime() const {
 void PacingController::ProcessPackets() {
   Timestamp now = CurrentTime();
   Timestamp target_send_time = now;
+
   if (mode_ == ProcessMode::kDynamic) {
     target_send_time = NextSendTime();
-    TimeDelta early_execute_margin =
-        prober_.is_probing() ? kMaxEarlyProbeProcessing : TimeDelta::Zero();
+    TimeDelta early_execute_margin = prober_.is_probing() ? kMaxEarlyProbeProcessing : TimeDelta::Zero();
     if (target_send_time.IsMinusInfinity()) {
       target_send_time = now;
     } else if (now < target_send_time - early_execute_margin) {
-      // We are too early, but if queue is empty still allow draining some debt.
-      // Probing is allowed to be sent up to kMinSleepTime early.
+      // 我们来得有点早，但如果队列为空，仍然允许消耗一些负债
       TimeDelta elapsed_time = UpdateTimeAndGetElapsed(now);
       UpdateBudgetWithElapsedTime(elapsed_time);
       return;
@@ -434,11 +407,13 @@ void PacingController::ProcessPackets() {
       UpdateBudgetWithElapsedTime(last_process_time_ - target_send_time);
       target_send_time = last_process_time_;
     }
-  }
+  } // if (mode_ == ProcessMode::kDynamic) {
 
   Timestamp previous_process_time = last_process_time_;
+  // 计算流逝的时间（当前时间距离上一次发送过去了多长时间）
   TimeDelta elapsed_time = UpdateTimeAndGetElapsed(now);
 
+  // 保活
   if (ShouldSendKeepalive(now)) {
     // We can not send padding unless a normal packet has first been sent. If
     // we do, timestamps get messed up.
@@ -464,27 +439,30 @@ void PacingController::ProcessPackets() {
     return;
   }
 
+
   if (elapsed_time > TimeDelta::Zero()) {
+    // pacing_bitrate_ 不会被修改，被修改的是临时变量
     DataRate target_rate = pacing_bitrate_;
+    // 队列中正在排队的总字节数
     DataSize queue_size_data = packet_queue_.Size();
     if (queue_size_data > DataSize::Zero()) {
       // Assuming equal size packets and input/output rate, the average packet
       // has avg_time_left_ms left to get queue_size_bytes out of the queue, if
       // time constraint shall be met. Determine bitrate needed for that.
       packet_queue_.UpdateQueueTime(now);
+      // 如果开启了 drain_large_queues_，queue 中的数据难以以当前速率在剩余时间内发送出去
+      // 则适当提高当前发送码率（通过修改 budget）  
       if (drain_large_queues_) {
-        TimeDelta avg_time_left =
-            std::max(TimeDelta::Millis(1),
-                     queue_time_limit - packet_queue_.AverageQueueTime());
+        // max(1ms, ) 是为了避免出现负值
+        TimeDelta avg_time_left = std::max(TimeDelta::Millis(1), queue_time_limit - packet_queue_.AverageQueueTime());
         DataRate min_rate_needed = queue_size_data / avg_time_left;
         if (min_rate_needed > target_rate) {
           target_rate = min_rate_needed;
-          RTC_LOG(LS_VERBOSE) << "bwe:large_pacing_queue pacing_rate_kbps="
-                              << target_rate.kbps();
         }
       }
     }
 
+    // 更新预算
     if (mode_ == ProcessMode::kPeriodic) {
       // In periodic processing mode, the IntevalBudget allows positive budget
       // up to (process interval duration) * (target rate), so we only need to
@@ -492,10 +470,12 @@ void PacingController::ProcessPackets() {
       media_budget_.set_target_rate_kbps(target_rate.kbps());
       UpdateBudgetWithElapsedTime(elapsed_time);
     } else {
+      // 动态调度时，更改 media_rate_，提高还债能力
       media_rate_ = target_rate;
     }
-  }
+  } // if (elapsed_time > TimeDelta::Zero()) {
 
+  // 获取 probing 大小
   bool first_packet_in_probe = false;
   PacedPacketInfo pacing_info;
   DataSize recommended_probe_size = DataSize::Zero();
@@ -507,7 +487,6 @@ void PacingController::ProcessPackets() {
     if (pacing_info.probe_cluster_id != PacedPacketInfo::kNotAProbe) {
       first_packet_in_probe = pacing_info.probe_cluster_bytes_sent == 0;
       recommended_probe_size = prober_.RecommendedMinProbeSize();
-      RTC_DCHECK_GT(recommended_probe_size, DataSize::Zero());
     } else {
       // No valid probe cluster returned, probe might have timed out.
       is_probing = false;
@@ -545,11 +524,11 @@ void PacingController::ProcessPackets() {
       previous_process_time = target_send_time;
     }
 
-    // Fetch the next packet, so long as queue is not empty or budget is not
-    // exhausted.
+    // 获取需要发送的报文，需要检查是否拥塞、budget 是否足够
     std::unique_ptr<RtpPacketToSend> rtp_packet =
         GetPendingPacket(pacing_info, target_send_time, now);
 
+    // 当前无法发送媒体包，检查是否发送 padding
     if (rtp_packet == nullptr) {
       // No packet available to send, check if we should send padding.
       DataSize padding_to_add = PaddingToAdd(recommended_probe_size, data_sent);
@@ -568,11 +547,11 @@ void PacingController::ProcessPackets() {
       }
 
       // Can't fetch new packet and no padding to send, exit send loop.
+      // 用完预算后退出循环
       break;
-    }
+    } // if (rtp_packet == nullptr) {
 
-    RTC_DCHECK(rtp_packet);
-    RTC_DCHECK(rtp_packet->packet_type().has_value());
+    // 封装发送报文，通过回调发送报文
     const RtpPacketMediaType packet_type = *rtp_packet->packet_type();
     DataSize packet_size = DataSize::Bytes(rtp_packet->payload_size() +
                                            rtp_packet->padding_size());
@@ -588,7 +567,7 @@ void PacingController::ProcessPackets() {
     }
     data_sent += packet_size;
 
-    // Send done, update send/process time to the target send time.
+    // 发送完成后，更新一些统计以及 budget
     OnPacketSent(packet_type, packet_size, target_send_time);
 
     // If we are currently probing, we need to stop the send loop when we have
@@ -607,10 +586,11 @@ void PacingController::ProcessPackets() {
         target_send_time = std::min(now, next_send_time);
       }
     }
-  }
+  } // while (!paused_) {
 
   last_process_time_ = std::max(last_process_time_, previous_process_time);
 
+  // 更新 probing 状态
   if (is_probing) {
     probing_send_failure_ = data_sent == DataSize::Zero();
     if (!probing_send_failure_) {
@@ -661,29 +641,31 @@ std::unique_ptr<RtpPacketToSend> PacingController::GetPendingPacket(
     return nullptr;
   }
 
-  // First, check if there is any reason _not_ to send the next queued packet.
+  // 首先，检查是否有任何原因不发送下一个排队的数据包
 
-  // Unpaced audio packets and probes are exempted from send checks.
+  // 未调整的音频数据包和探测数据包免于发送检查
+
   bool unpaced_audio_packet =
       !pace_audio_ && packet_queue_.LeadingAudioPacketEnqueueTime().has_value();
   bool is_probe = pacing_info.probe_cluster_id != PacedPacketInfo::kNotAProbe;
   if (!unpaced_audio_packet && !is_probe) {
     if (Congested()) {
-      // Don't send anything if congested.
+      // 拥塞时不要发送任何数据
       return nullptr;
     }
 
     if (mode_ == ProcessMode::kPeriodic) {
       if (media_budget_.bytes_remaining() <= 0) {
-        // Not enough budget.
+        // 没有足够的预算
         return nullptr;
       }
     } else {
-      // Dynamic processing mode.
+      // 动态处理模式
       if (now <= target_send_time) {
         // We allow sending slightly early if we think that we would actually
         // had been able to, had we been right on time - i.e. the current debt
         // is not more than would be reduced to zero at the target sent time.
+        // 我们允许稍微提前发送，...
         TimeDelta flush_time = media_debt_ / media_rate_;
         if (now + flush_time > target_send_time) {
           return nullptr;
@@ -695,6 +677,7 @@ std::unique_ptr<RtpPacketToSend> PacingController::GetPendingPacket(
   return packet_queue_.Pop();
 }
 
+// 发送完数据，减少预算
 void PacingController::OnPacketSent(RtpPacketMediaType packet_type,
                                     DataSize packet_size,
                                     Timestamp send_time) {
@@ -725,6 +708,7 @@ void PacingController::UpdateBudgetWithElapsedTime(TimeDelta delta) {
     media_budget_.IncreaseBudget(delta.ms());
     padding_budget_.IncreaseBudget(delta.ms());
   } else {
+    // 减少负债时用 速率 * 时间
     media_debt_ -= std::min(media_debt_, media_rate_ * delta);
     padding_debt_ -= std::min(padding_debt_, padding_rate_ * delta);
   }
